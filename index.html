@@ -207,11 +207,42 @@
 
   /* contacts */
   .contact-avatar{
-    width:38px;height:38px;border-radius:50%;background:var(--ink);color:var(--paper);
+    width:42px;height:42px;border-radius:50%;background:var(--ink);color:var(--paper);
     display:flex;align-items:center;justify-content:center;font-family:'Noto Serif TC',serif;
-    font-size:15px;flex-shrink:0;
+    font-size:16px;flex-shrink:0;overflow:hidden;
   }
+  .contact-avatar img{width:100%;height:100%;object-fit:cover;}
   .contact-top{display:flex;gap:10px;align-items:center;}
+  .cat-badge{
+    display:inline-block;font-size:10px;font-family:'JetBrains Mono',monospace;
+    padding:1px 7px;border-radius:20px;background:var(--gold);color:#fff;margin-right:5px;
+  }
+  .cat-badge.sub{background:transparent;border:1px solid var(--hairline);color:var(--ink-soft);}
+  .contact-lines{font-size:12.5px;color:var(--ink);margin-top:10px;line-height:1.85;}
+  .contact-lines .cl-label{color:var(--ink-soft);font-family:'JetBrains Mono',monospace;font-size:10.5px;margin-right:4px;}
+
+  /* repeatable field groups (contact modal) */
+  .rep-group{grid-column:span 2;margin-bottom:2px;}
+  .rep-group label{margin-bottom:6px;}
+  .rep-row{display:flex;gap:6px;margin-bottom:6px;}
+  .rep-row input{flex:1;}
+  .rep-remove{
+    border:1px solid var(--hairline);background:var(--card);color:var(--ink-soft);
+    width:34px;border-radius:var(--radius);flex-shrink:0;font-size:13px;
+  }
+  .rep-remove:hover{border-color:var(--seal);color:var(--seal);}
+  .rep-add{
+    border:1px dashed var(--hairline);background:none;color:var(--ink-soft);
+    padding:5px 12px;border-radius:var(--radius);font-size:11.5px;
+  }
+  .rep-add:hover{border-color:var(--gold);color:var(--gold);}
+  .contact-photo-row{grid-column:span 2;display:flex;align-items:center;gap:14px;margin-bottom:4px;}
+  .contact-photo-box{
+    width:64px;height:64px;border-radius:50%;background:var(--card);border:1px solid var(--hairline);
+    display:flex;align-items:center;justify-content:center;overflow:hidden;flex-shrink:0;cursor:pointer;
+  }
+  .contact-photo-box img{width:100%;height:100%;object-fit:cover;}
+  .contact-photo-box .ph2{font-size:9.5px;color:var(--ink-soft);text-align:center;}
 
   .toast{
     position:fixed;bottom:20px;left:50%;transform:translateX(-50%) translateY(20px);
@@ -326,8 +357,13 @@
   <!-- CONTACTS -->
   <section class="view" id="view-contacts">
     <div class="panel-head">
-      <div><h2>聯絡人</h2><div class="panel-desc">重要的人與聯絡方式</div></div>
-      <button class="btn btn-primary" data-add="contacts">＋ 新增聯絡人</button>
+      <div><h2>聯絡人</h2><div class="panel-desc">重要的人與聯絡方式，支援多筆電話／Email／地址等資訊</div></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;">
+        <button class="btn btn-sm" id="btnExportContacts">⭳ 匯出 Excel</button>
+        <button class="btn btn-sm" id="btnImportContacts">⭱ 匯入 Excel</button>
+        <input type="file" id="importContactsInput" accept=".xlsx,.xls" style="display:none;">
+        <button class="btn btn-primary" data-add="contacts">＋ 新增聯絡人</button>
+      </div>
     </div>
     <div class="grid" id="listContacts"></div>
   </section>
@@ -381,6 +417,7 @@
 <div class="toast" id="toast"></div>
 
 <script src="https://accounts.google.com/gsi/client" async defer></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script>
 (function(){
 "use strict";
@@ -492,21 +529,43 @@ const FIELD_CONFIG = {
     },
     fileLabel:"證照影本",
   },
-  contacts:{
-    label:"聯絡人", listId:"listContacts",
-    fields:[
-      {key:"name",label:"姓名",type:"text",full:true,placeholder:"陳大文"},
-      {key:"relation",label:"關係",type:"text",placeholder:"家人 / 朋友 / 主管..."},
-      {key:"phone",label:"電話",type:"text",placeholder:"0912-345-678"},
-      {key:"email",label:"Email",type:"text",placeholder:"name@example.com"},
-      {key:"note",label:"備註",type:"textarea",full:true,placeholder:"認識經過、地址等"},
-    ],
-    title:(r)=>r.name||"（未命名聯絡人）",
-    sub:(r)=>[r.relation].filter(Boolean).join(" · "),
-    date:null,
-    fileLabel:null,
-  }
 };
+
+/* contacts uses a dedicated schema (supports multi-value fields) instead of FIELD_CONFIG */
+const CONTACT_REPEATABLE_GROUPS = [
+  {key:"titles",   label:"稱謂 / 職稱",     placeholder:"例如：經理、朋友、表哥"},
+  {key:"companies",label:"就業單位 / 公司", placeholder:"例如：某某股份有限公司"},
+  {key:"phones",   label:"電話",           placeholder:"例如：02-1234-5678"},
+  {key:"mobiles",  label:"手機",           placeholder:"例如：0912-345-678"},
+  {key:"emails",   label:"Email",          placeholder:"name@example.com"},
+  {key:"addresses",label:"住址",           placeholder:"完整地址"},
+  {key:"websites", label:"網頁",           placeholder:"https://..."},
+];
+const CONTACT_CATEGORIES = ["家人","朋友","同事","主管","客戶","廠商","同學","其他"];
+
+function normalizeContact(r){
+  r=r||{};
+  const out={
+    id:r.id||uid(),
+    category:r.category||r.relation||"",
+    subCategory:r.subCategory||"",
+    name:r.name||"",
+    birthday:r.birthday||"",
+    note:r.note||"",
+    photoDataUrl:r.photoDataUrl||null,
+    photoFileId:r.photoFileId||null,
+    photoLink:r.photoLink||null,
+  };
+  CONTACT_REPEATABLE_GROUPS.forEach(g=>{
+    let arr = Array.isArray(r[g.key]) ? r[g.key].slice() : [];
+    if(!arr.length){
+      if(g.key==='phones' && r.phone) arr=[r.phone];
+      if(g.key==='emails' && r.email) arr=[r.email];
+    }
+    out[g.key]=arr.filter(v=>v!=null && String(v).trim()!=="");
+  });
+  return out;
+}
 
 function fmtDate(s){
   if(!s) return "";
@@ -528,7 +587,7 @@ function renderAll(){
   renderList('education');
   renderList('employment');
   renderList('certificates');
-  renderList('contacts');
+  renderContactsList();
   renderTimeline();
 }
 
@@ -565,25 +624,14 @@ function renderList(type){
     return db.localeCompare(da);
   });
   wrap.innerHTML = sorted.map(r=>{
-    const isContact = type==='contacts';
-    const titleHtml = isContact
-      ? '<div class="contact-top"><div class="contact-avatar">'+escapeHtml((r.name||"?").slice(0,1))+'</div><div><div class="card-title">'+escapeHtml(cfg.title(r))+'</div><div class="card-sub">'+escapeHtml(cfg.sub(r))+'</div></div></div>'
-      : '<div><div class="card-title">'+escapeHtml(cfg.title(r))+'</div><div class="card-sub">'+escapeHtml(cfg.sub(r))+'</div></div>';
+    const titleHtml = '<div><div class="card-title">'+escapeHtml(cfg.title(r))+'</div><div class="card-sub">'+escapeHtml(cfg.sub(r))+'</div></div>';
     let extra='';
-    if(isContact){
-      const lines=[];
-      if(r.phone) lines.push('☎ '+escapeHtml(r.phone));
-      if(r.email) lines.push('✉ '+escapeHtml(r.email));
-      if(lines.length) extra='<div class="card-desc">'+lines.join('<br>')+'</div>';
-      if(r.note) extra+='<div class="card-desc" style="opacity:.75">'+escapeHtml(r.note)+'</div>';
+    if(cfg.date) extra+='<div class="card-date">'+cfg.date(r)+'</div>';
+    if(r.description) extra+='<div class="card-desc">'+escapeHtml(r.description)+'</div>';
+    if(r.fileName){
+      extra+='<div class="clip" data-view-file="'+type+'|'+r.id+'">'+svgClip()+'<span>'+escapeHtml(cfg.fileLabel)+'：'+escapeHtml(r.fileName)+'</span></div>';
     } else {
-      if(cfg.date) extra+='<div class="card-date">'+cfg.date(r)+'</div>';
-      if(r.description) extra+='<div class="card-desc">'+escapeHtml(r.description)+'</div>';
-      if(r.fileName){
-        extra+='<div class="clip" data-view-file="'+type+'|'+r.id+'">'+svgClip()+'<span>'+escapeHtml(cfg.fileLabel)+'：'+escapeHtml(r.fileName)+'</span></div>';
-      } else {
-        extra+='<div class="no-file">尚未上傳'+escapeHtml(cfg.fileLabel||"附件")+'</div>';
-      }
+      extra+='<div class="no-file">尚未上傳'+escapeHtml(cfg.fileLabel||"附件")+'</div>';
     }
     return '<div class="card">'+
       '<div class="card-top">'+titleHtml+
@@ -591,6 +639,45 @@ function renderList(type){
         '<button class="btn btn-ghost btn-sm" data-edit="'+type+'|'+r.id+'">編輯</button>'+
       '</div></div>'+
       extra+
+    '</div>';
+  }).join('');
+}
+
+function renderContactsList(){
+  const wrap=document.getElementById('listContacts');
+  const items=(data.contacts||[]).map(normalizeContact);
+  if(!items.length){
+    wrap.innerHTML='<div class="empty">尚無聯絡人，點擊上方「＋ 新增聯絡人」開始建立，或用 Excel 批次匯入。</div>';
+    return;
+  }
+  const sorted=[...items].sort((a,b)=>(a.name||"").localeCompare(b.name||"","zh-Hant"));
+  wrap.innerHTML = sorted.map(r=>{
+    const photo = r.photoLink || r.photoDataUrl;
+    const avatar = photo
+      ? '<div class="contact-avatar"><img src="'+photo+'"></div>'
+      : '<div class="contact-avatar">'+escapeHtml((r.name||"?").slice(0,1))+'</div>';
+    const badges = (r.category?'<span class="cat-badge">'+escapeHtml(r.category)+'</span>':'') +
+      (r.subCategory?'<span class="cat-badge sub">'+escapeHtml(r.subCategory)+'</span>':'');
+    const subLine = [ (r.titles||[]).join('、'), (r.companies||[]).join('、') ].filter(Boolean).join(' · ');
+
+    const lineRows=[];
+    if((r.phones||[]).length) lineRows.push('<div><span class="cl-label">TEL</span>'+escapeHtml(r.phones.join(' / '))+'</div>');
+    if((r.mobiles||[]).length) lineRows.push('<div><span class="cl-label">MOB</span>'+escapeHtml(r.mobiles.join(' / '))+'</div>');
+    if((r.emails||[]).length) lineRows.push('<div><span class="cl-label">MAIL</span>'+escapeHtml(r.emails.join(' / '))+'</div>');
+    if((r.addresses||[]).length) lineRows.push('<div><span class="cl-label">ADDR</span>'+escapeHtml(r.addresses.join('；'))+'</div>');
+    if(r.birthday) lineRows.push('<div><span class="cl-label">BIRTH</span>'+fmtDate(r.birthday)+'</div>');
+    if((r.websites||[]).length) lineRows.push('<div><span class="cl-label">WEB</span>'+escapeHtml(r.websites.join(' / '))+'</div>');
+
+    return '<div class="card">'+
+      '<div class="card-top">'+
+        '<div class="contact-top">'+avatar+
+          '<div><div class="card-title">'+escapeHtml(r.name||"（未命名聯絡人）")+'</div>'+
+          '<div class="card-sub">'+badges+(subLine?('<span style="margin-left:4px;">'+escapeHtml(subLine)+'</span>'):'')+'</div></div>'+
+        '</div>'+
+        '<div class="card-actions"><button class="btn btn-ghost btn-sm" data-edit-contact="'+r.id+'">編輯</button></div>'+
+      '</div>'+
+      (lineRows.length?'<div class="contact-lines">'+lineRows.join('')+'</div>':'')+
+      (r.note?'<div class="card-desc" style="opacity:.75;margin-top:8px;">'+escapeHtml(r.note)+'</div>':'')+
     '</div>';
   }).join('');
 }
@@ -668,6 +755,130 @@ function openModal(type, id){
   document.getElementById('overlay').classList.add('active');
 }
 
+/* ---------------- contact modal (dedicated, supports multi-value fields) ---------------- */
+let contactPendingPhoto = null;
+
+function repRowHtml(groupKey, value){
+  return '<div class="rep-row">'+
+    '<input data-rep-input data-rep-group="'+groupKey+'" value="'+escapeHtml(value||"")+'" placeholder="'+escapeHtml(CONTACT_REPEATABLE_GROUPS.find(g=>g.key===groupKey).placeholder)+'">'+
+    '<button type="button" class="rep-remove" data-rep-remove="'+groupKey+'">✕</button>'+
+  '</div>';
+}
+
+function openContactModal(id){
+  modalCtx = {type:'contacts', id, pendingFile:null};
+  contactPendingPhoto = null;
+  const record = id ? normalizeContact(data.contacts.find(r=>r.id===id)) : normalizeContact({});
+
+  document.getElementById('modalTitle').textContent = (id?"編輯":"新增") + "聯絡人";
+  document.getElementById('modalSub').textContent = id ? "修改後請記得儲存" : "填寫完成後點擊下方儲存，多筆電話／Email 等可點「＋新增」";
+  document.getElementById('modalFileDrop').style.display='none';
+  document.getElementById('modalFileInput').style.display='none';
+
+  const catOptions = Array.from(new Set([...CONTACT_CATEGORIES, record.category].filter(Boolean)))
+    .map(c=>'<option value="'+escapeHtml(c)+'"></option>').join('');
+
+  let html = '';
+  html += '<div class="contact-photo-row">'+
+      '<div class="contact-photo-box" id="contactPhotoBox">'+
+        (record.photoLink||record.photoDataUrl ? '<img src="'+(record.photoLink||record.photoDataUrl)+'">' : '<span class="ph2">上傳<br>照片</span>')+
+      '</div>'+
+      '<div style="font-size:11.5px;color:var(--ink-soft);">點擊左側圓框上傳／更換照片<br>支援 JPG / PNG</div>'+
+      '<input type="file" id="contactPhotoInput" accept="image/*" style="display:none;">'+
+    '</div>';
+
+  html += '<div class="half"><label>分類</label><input id="ctCategory" list="ctCategoryList" value="'+escapeHtml(record.category)+'" placeholder="家人 / 朋友 / 同事..."><datalist id="ctCategoryList">'+catOptions+'</datalist></div>';
+  html += '<div class="half"><label>子分類</label><input id="ctSubCategory" value="'+escapeHtml(record.subCategory)+'" placeholder="例如：媽媽這邊的親戚"></div>';
+  html += '<div class="half"><label>姓名</label><input id="ctName" value="'+escapeHtml(record.name)+'" placeholder="陳大文"></div>';
+  html += '<div class="half"><label>生日</label><input id="ctBirthday" type="date" value="'+escapeHtml(record.birthday)+'"></div>';
+
+  CONTACT_REPEATABLE_GROUPS.forEach(g=>{
+    const vals = record[g.key].length ? record[g.key] : [""];
+    html += '<div class="rep-group" data-rep-container="'+g.key+'">'+
+      '<label>'+g.label+'</label>'+
+      '<div class="rep-rows">'+vals.map(v=>repRowHtml(g.key,v)).join('')+'</div>'+
+      '<button type="button" class="rep-add" data-rep-add="'+g.key+'">＋ 新增'+g.label+'</button>'+
+    '</div>';
+  });
+
+  html += '<div class="full"><label>備註</label><textarea id="ctNote" placeholder="認識經過等">'+escapeHtml(record.note)+'</textarea></div>';
+
+  document.getElementById('modalFields').innerHTML = html;
+  document.getElementById('modalDelete').style.display = id ? 'inline-block' : 'none';
+  document.getElementById('overlay').classList.add('active');
+
+  document.getElementById('contactPhotoBox').onclick=()=>document.getElementById('contactPhotoInput').click();
+  document.getElementById('contactPhotoInput').addEventListener('change',(e)=>{
+    const file=e.target.files[0];
+    if(!file) return;
+    contactPendingPhoto = file;
+    const reader=new FileReader();
+    reader.onload=()=>{ document.getElementById('contactPhotoBox').innerHTML='<img src="'+reader.result+'">'; };
+    reader.readAsDataURL(file);
+  });
+}
+
+document.getElementById('modalFields').addEventListener('click',(e)=>{
+  const addBtn=e.target.closest('[data-rep-add]');
+  if(addBtn){
+    const key=addBtn.dataset.repAdd;
+    const container=document.querySelector('[data-rep-container="'+key+'"] .rep-rows');
+    container.insertAdjacentHTML('beforeend', repRowHtml(key,""));
+    return;
+  }
+  const rmBtn=e.target.closest('[data-rep-remove]');
+  if(rmBtn){
+    const row=rmBtn.closest('.rep-row');
+    const container=row.parentElement;
+    if(container.children.length>1) row.remove();
+    else row.querySelector('input').value='';
+  }
+});
+
+async function saveContactFromModal(){
+  const {id}=modalCtx;
+  const record = id ? data.contacts.find(r=>r.id===id) : {id:uid()};
+  record.category = document.getElementById('ctCategory').value.trim();
+  record.subCategory = document.getElementById('ctSubCategory').value.trim();
+  record.name = document.getElementById('ctName').value.trim();
+  record.birthday = document.getElementById('ctBirthday').value;
+  record.note = document.getElementById('ctNote').value.trim();
+  CONTACT_REPEATABLE_GROUPS.forEach(g=>{
+    const vals=[];
+    document.querySelectorAll('[data-rep-input][data-rep-group="'+g.key+'"]').forEach(inp=>{
+      const v=inp.value.trim();
+      if(v) vals.push(v);
+    });
+    record[g.key]=vals;
+  });
+  if(!id) data.contacts.push(record);
+
+  saveLocal(); renderAll(); closeModal();
+  toast('已儲存');
+
+  if(contactPendingPhoto){
+    const f=contactPendingPhoto;
+    const reader=new FileReader();
+    reader.onload=async function(){
+      record.photoDataUrl = reader.result;
+      saveLocal(); renderAll();
+      if(accessToken){
+        try{
+          const up=await uploadFileToDrive(f, record.photoFileId);
+          record.photoFileId=up.id;
+          record.photoLink=up.webViewLink;
+          saveLocal(); renderAll();
+          toast('照片已同步至 Google 雲端');
+        }catch(err){ console.error(err); toast('照片雲端上傳失敗，已保留在本機'); }
+      }
+      syncToDriveDebounced();
+    };
+    reader.readAsDataURL(f);
+  } else {
+    syncToDriveDebounced();
+  }
+}
+
 document.getElementById('modalFileDrop').addEventListener('click',()=>document.getElementById('modalFileInput').click());
 document.getElementById('modalFileInput').addEventListener('change',(e)=>{
   const file=e.target.files[0];
@@ -694,6 +905,7 @@ document.getElementById('modalDelete').onclick=function(){
 };
 
 document.getElementById('modalSave').onclick=async function(){
+  if(modalCtx.type==='contacts'){ await saveContactFromModal(); return; }
   const {type,id}=modalCtx;
   const cfg=FIELD_CONFIG[type];
   const record = id ? data[type].find(r=>r.id===id) : {id:uid()};
@@ -735,7 +947,10 @@ document.getElementById('modalSave').onclick=async function(){
 };
 
 document.querySelectorAll('[data-add]').forEach(btn=>{
-  btn.addEventListener('click',()=>openModal(btn.dataset.add,null));
+  btn.addEventListener('click',()=>{
+    if(btn.dataset.add==='contacts') openContactModal(null);
+    else openModal(btn.dataset.add,null);
+  });
 });
 
 document.addEventListener('click',(e)=>{
@@ -743,6 +958,11 @@ document.addEventListener('click',(e)=>{
   if(editBtn){
     const [type,id]=editBtn.dataset.edit.split('|');
     openModal(type,id);
+    return;
+  }
+  const editContactBtn=e.target.closest('[data-edit-contact]');
+  if(editContactBtn){
+    openContactModal(editContactBtn.dataset.editContact);
     return;
   }
   const viewBtn=e.target.closest('[data-view-file]');
@@ -817,6 +1037,93 @@ document.getElementById('importJsonInput').addEventListener('change',(e)=>{
   };
   reader.readAsText(file);
 });
+
+/* ---------------- contacts: excel export / import ---------------- */
+const CONTACT_EXCEL_COLUMNS = [
+  {header:"分類", key:"category", multi:false},
+  {header:"子分類", key:"subCategory", multi:false},
+  {header:"姓名", key:"name", multi:false},
+  {header:"稱謂/職稱", key:"titles", multi:true},
+  {header:"就業單位/公司", key:"companies", multi:true},
+  {header:"電話", key:"phones", multi:true},
+  {header:"手機", key:"mobiles", multi:true},
+  {header:"Email", key:"emails", multi:true},
+  {header:"住址", key:"addresses", multi:true},
+  {header:"生日", key:"birthday", multi:false},
+  {header:"網頁", key:"websites", multi:true},
+  {header:"備註", key:"note", multi:false},
+];
+
+document.getElementById('btnExportContacts').onclick=function(){
+  if(typeof XLSX==='undefined'){ toast('Excel 元件載入失敗，請檢查網路連線後重試'); return; }
+  const rows=(data.contacts||[]).map(normalizeContact).map(r=>{
+    const row={};
+    CONTACT_EXCEL_COLUMNS.forEach(c=>{
+      row[c.header]= c.multi ? (r[c.key]||[]).join('；') : (c.key==='birthday'? r.birthday : (r[c.key]||''));
+    });
+    return row;
+  });
+  const ws=XLSX.utils.json_to_sheet(rows, {header:CONTACT_EXCEL_COLUMNS.map(c=>c.header)});
+  ws['!cols']=CONTACT_EXCEL_COLUMNS.map(c=>({wch: c.key==='note'||c.multi?28:14}));
+  const wb=XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, '聯絡人');
+  XLSX.writeFile(wb, '聯絡人清單-'+new Date().toISOString().slice(0,10)+'.xlsx');
+  toast('已匯出 Excel（照片需另外於每筆聯絡人上傳）');
+};
+
+document.getElementById('btnImportContacts').onclick=()=>document.getElementById('importContactsInput').click();
+document.getElementById('importContactsInput').addEventListener('change',(e)=>{
+  const file=e.target.files[0];
+  if(!file) return;
+  if(typeof XLSX==='undefined'){ toast('Excel 元件載入失敗，請檢查網路連線後重試'); return; }
+  const reader=new FileReader();
+  reader.onload=function(){
+    try{
+      const wb=XLSX.read(reader.result, {type:'array'});
+      const sheet=wb.Sheets[wb.SheetNames[0]];
+      const rows=XLSX.utils.sheet_to_json(sheet, {defval:''});
+      if(!rows.length){ toast('這個檔案沒有可匯入的資料'); return; }
+      if(!confirm('將匯入 '+rows.length+' 筆聯絡人，新增到目前清單中（不會覆蓋既有資料），確定嗎？')) return;
+      let count=0;
+      rows.forEach(row=>{
+        const rec={id:uid()};
+        CONTACT_EXCEL_COLUMNS.forEach(c=>{
+          const raw = row[c.header];
+          if(c.multi){
+            rec[c.key] = String(raw||'').split(/[；;、,]/).map(s=>s.trim()).filter(Boolean);
+          } else if(c.key==='birthday'){
+            rec.birthday = normalizeImportedDate(raw);
+          } else {
+            rec[c.key] = String(raw||'').trim();
+          }
+        });
+        if(rec.name || rec.phones.length || rec.emails.length){
+          data.contacts.push(normalizeContact(rec));
+          count++;
+        }
+      });
+      saveLocal(); renderAll(); syncToDriveDebounced();
+      toast('已匯入 '+count+' 筆聯絡人');
+    }catch(err){
+      console.error(err);
+      toast('Excel 檔案讀取失敗，請確認格式是否正確');
+    }
+    e.target.value='';
+  };
+  reader.readAsArrayBuffer(file);
+});
+
+function normalizeImportedDate(v){
+  if(!v) return '';
+  if(typeof v==='number'){
+    const d=XLSX.SSF? XLSX.SSF.parse_date_code(v) : null;
+    if(d) return d.y+'-'+String(d.m).padStart(2,'0')+'-'+String(d.d).padStart(2,'0');
+  }
+  const s=String(v).trim();
+  const m=s.match(/(\d{4})[\/\-\.](\d{1,2})[\/\-\.](\d{1,2})/);
+  if(m) return m[1]+'-'+m[2].padStart(2,'0')+'-'+m[3].padStart(2,'0');
+  return '';
+}
 
 /* ---------------- Google OAuth / Drive sync ---------------- */
 function getClientId(){ return localStorage.getItem(LS_CLIENT_ID) || ""; }
